@@ -210,6 +210,7 @@ export class GameManager extends Component {
     /** Tốc độ mục tiêu để game không bị nhanh quá lâu. */
     private readonly cruiseBallSpeed: number = 560;
     private readonly maxBallSpeed: number = 660;
+    private readonly minBallVerticalSpeed: number = 110;
     /** Tốc độ giảm dần về cruise mỗi giây khi bóng đang quá nhanh. */
     private readonly speedRelaxPerSecond: number = 0.22;
     private readonly bestScoreStorageKey: string = 'arkanoid_best_score';
@@ -458,23 +459,81 @@ export class GameManager extends Component {
         const left = -halfWidth + this.ballRadius;
         const right = halfWidth - this.ballRadius;
         const top = halfHeight - this.ballRadius;
+        let wallHit = false;
 
-        if (pos.x <= left) {
-            pos.x = left;
-            velocity.x *= -1;
+        if (pos.x < left) {
+            if (velocity.x < 0) {
+                pos.x = left + (left - pos.x);
+                velocity.x = Math.abs(velocity.x);
+                wallHit = true;
+            } else {
+                pos.x = left;
+            }
         }
 
-        if (pos.x >= right) {
-            pos.x = right;
-            velocity.x *= -1;
+        if (pos.x > right) {
+            if (velocity.x > 0) {
+                pos.x = right - (pos.x - right);
+                velocity.x = -Math.abs(velocity.x);
+                wallHit = true;
+            } else {
+                pos.x = right;
+            }
         }
 
-        if (pos.y >= top) {
-            pos.y = top;
-            velocity.y *= -1;
+        if (pos.y > top) {
+            if (velocity.y > 0) {
+                pos.y = top - (pos.y - top);
+                velocity.y = -Math.abs(velocity.y);
+                wallHit = true;
+            } else {
+                pos.y = top;
+            }
+        }
+
+        pos.x = this.clamp(pos.x, left, right);
+        pos.y = Math.min(pos.y, top);
+
+        if (wallHit && Math.abs(velocity.x) < 45 && Math.abs(velocity.y) > 0) {
+            velocity.x = velocity.x < 0 ? -45 : 45;
+            this.normalizeBallSpeed(velocity);
+        }
+
+        if (wallHit) {
+            this.ensureBallHasVerticalMotion(velocity, velocity.y);
         }
 
         ball.setPosition(pos);
+    }
+
+    private normalizeBallSpeed(velocity: Vec3) {
+        const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
+
+        if (speed <= 0) return;
+
+        const targetSpeed = this.clamp(speed, 260, this.maxBallSpeed);
+
+        velocity.x = velocity.x / speed * targetSpeed;
+        velocity.y = velocity.y / speed * targetSpeed;
+    }
+
+    private ensureBallHasVerticalMotion(velocity: Vec3, preferredYDirection: number = 0) {
+        const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
+
+        if (speed <= 0) return;
+
+        const minVertical = Math.min(this.minBallVerticalSpeed, speed * 0.45);
+
+        if (Math.abs(velocity.y) >= minVertical) return;
+
+        const ySign = velocity.y !== 0
+            ? Math.sign(velocity.y)
+            : (preferredYDirection !== 0 ? Math.sign(preferredYDirection) : -1);
+        const xSign = velocity.x !== 0 ? Math.sign(velocity.x) : 1;
+        const nextX = Math.sqrt(Math.max(speed * speed - minVertical * minVertical, 0));
+
+        velocity.x = xSign * nextX;
+        velocity.y = ySign * minVertical;
     }
 
     private checkPaddleCollision(ball: Node = this.ball, velocity: Vec3 = this.ballVelocity) {
@@ -490,6 +549,8 @@ export class GameManager extends Component {
         // để tránh lỗi "dịch chuyển tức thời" bóng lên trên đỉnh paddle.
         if (ballPos.y < paddlePos.y - 2) {
             velocity.x *= -1; // Chỉ bật ngang
+            this.normalizeBallSpeed(velocity);
+            this.ensureBallHasVerticalMotion(velocity, velocity.y);
             return;
         }
 
@@ -646,6 +707,7 @@ export class GameManager extends Component {
             velocity.x *= scale;
             velocity.y *= scale;
         }
+        this.ensureBallHasVerticalMotion(velocity, velocity.y);
         return false;
     }
 
@@ -653,15 +715,19 @@ export class GameManager extends Component {
         const vx = velocity.x;
         const vy = velocity.y;
         const speed = Math.sqrt(vx * vx + vy * vy);
-        if (speed <= this.cruiseBallSpeed) return;
+        if (speed <= 0) return;
+
+        if (speed <= this.cruiseBallSpeed) {
+            this.ensureBallHasVerticalMotion(velocity, velocity.y);
+            return;
+        }
 
         const t = Math.min(1, this.speedRelaxPerSecond * deltaTime);
         const targetSpeed = speed + (this.cruiseBallSpeed - speed) * t;
-        if (speed > 0) {
-            const scale = targetSpeed / speed;
-            velocity.x *= scale;
-            velocity.y *= scale;
-        }
+        const scale = targetSpeed / speed;
+        velocity.x *= scale;
+        velocity.y *= scale;
+        this.ensureBallHasVerticalMotion(velocity, velocity.y);
     }
 
     /** Bóng rơi khỏi đáy vùng chơi: mất mạng hoặc GAME OVER khi hết lives. */
@@ -2233,6 +2299,7 @@ export class GameManager extends Component {
 
         velocity.x *= 1.01;
         velocity.y *= 1.01;
+        this.ensureBallHasVerticalMotion(velocity, velocity.y);
 
         this.playBallHitEffect(ball);
         this.playScreenShake(4, 0.08);
