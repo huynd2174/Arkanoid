@@ -328,10 +328,10 @@ export class GameManager extends Component {
         this.resetPaddleVisual();
 
         this.clearExtraBalls();
-        this.paddle.setPosition(0, -430, 0);
+        this.paddle.setPosition(0, -340, 0);
         this.ball.active = true;
         this.ball.setScale(this.ballScaleDefault, this.ballScaleDefault, 1);
-        this.ball.setPosition(0, -370, 0);
+        this.ball.setPosition(0, -280, 0);
         this.ballVelocity.set(260, 500, 0);
         this.balls = [this.ball];
         this.ballVelocityMap.clear();
@@ -917,7 +917,7 @@ export class GameManager extends Component {
     }
 
     private startPaddleRespawn() {
-        this.paddle.setPosition(0, -430, 0);
+        this.paddle.setPosition(0, -340, 0);
         this.paddleTargetX = 0;
         this.ball.active = true;
         this.ball.setScale(this.ballScaleDefault, this.ballScaleDefault, 1);
@@ -968,13 +968,13 @@ export class GameManager extends Component {
 
         const gapX = 2;
         const gapY = 2;
-        const groupGap = 30;
+        const groupGap = 40;
 
         const groupWidth = colsPerGroup * brickW + (colsPerGroup - 1) * gapX;
         const totalWidth = groups * groupWidth + (groups - 1) * groupGap;
 
         const startX = -totalWidth / 2 + brickW / 2;
-        const startY = 388;
+        const startY = 360;
 
         // Màu theo từng hàng (cố định, không random)
         const rowColorIndices = [3, 2, 4, 0, 1, 0, 5, 3];
@@ -1857,7 +1857,7 @@ export class GameManager extends Component {
 
     private forceCenterPaddleAndBall() {
         this.paddleTargetX = 0;
-        this.paddle.setPosition(0, -430, 0);
+        this.paddle.setPosition(0, -340, 0);
         if (this.isBallOnPaddle) {
             this.attachBallToPaddle();
         }
@@ -2636,14 +2636,20 @@ export class GameManager extends Component {
         }
 
         const upStep = Math.max(fallStep, sideStep, 1);
-        const maxUpStep = Math.max(upStep * 4, 40);
+        const maxUpStep = Math.max(upStep * 15, 150); // Cho phép leo lên cao hơn để thoát kẹt
 
-        for (let distance = upStep; distance <= maxUpStep; distance += upStep) {
-            const candidate = blockedPosition.clone();
-            candidate.y = blockedPosition.y + distance;
+        // Đi lên trên đến khi sang ngang được
+        for (let height = upStep; height <= maxUpStep; height += upStep) {
+            for (const dir of directions) {
+                for (let distance = minStep; distance <= maxStep * 4; distance += minStep) {
+                    const candidateDiag = origin.clone();
+                    candidateDiag.y = origin.y + height;
+                    candidateDiag.x = this.clamp(origin.x + dir * distance, leftLimit, rightLimit);
 
-            if (!this.isObstacleTouchingAnyBrickAt(obstacle, candidate)) {
-                return candidate;
+                    if (!this.isObstacleTouchingAnyBrickAt(obstacle, candidateDiag)) {
+                        return candidateDiag;
+                    }
+                }
             }
         }
 

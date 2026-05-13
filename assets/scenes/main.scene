@@ -369,7 +369,7 @@
     "_lpos": {
       "__type__": "cc.Vec3",
       "x": 0,
-      "y": -40,
+      "y": -21.408,
       "z": 0
     },
     "_lrot": {
@@ -475,7 +475,7 @@
     "_lpos": {
       "__type__": "cc.Vec3",
       "x": 0,
-      "y": 515,
+      "y": 477,
       "z": 0
     },
     "_lrot": {
@@ -608,7 +608,7 @@
     "_lpos": {
       "__type__": "cc.Vec3",
       "x": -320,
-      "y": 5,
+      "y": -20,
       "z": 0
     },
     "_lrot": {
@@ -647,7 +647,7 @@
     "_contentSize": {
       "__type__": "cc.Size",
       "width": 22,
-      "height": 1050
+      "height": 1025.548
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -717,7 +717,7 @@
     "_lpos": {
       "__type__": "cc.Vec3",
       "x": 320,
-      "y": 5,
+      "y": -20,
       "z": 0
     },
     "_lrot": {
@@ -756,7 +756,7 @@
     "_contentSize": {
       "__type__": "cc.Size",
       "width": 22,
-      "height": 1050
+      "height": 1025.548
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -861,7 +861,7 @@
     "_lpos": {
       "__type__": "cc.Vec3",
       "x": 0,
-      "y": -430,
+      "y": -354.87,
       "z": 0
     },
     "_lrot": {
@@ -1238,7 +1238,7 @@
     "_lpos": {
       "__type__": "cc.Vec3",
       "x": 0,
-      "y": -410.488,
+      "y": -335.358,
       "z": 0
     },
     "_lrot": {
@@ -1524,7 +1524,7 @@
     "_contentSize": {
       "__type__": "cc.Size",
       "width": 640,
-      "height": 1050
+      "height": 937.3770000000001
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -4486,8 +4486,8 @@
     "_prefab": null,
     "_lpos": {
       "__type__": "cc.Vec3",
-      "x": 0,
-      "y": -600,
+      "x": 1.366,
+      "y": -540,
       "z": 0
     },
     "_lrot": {
@@ -4526,11 +4526,11 @@
     "_contentSize": {
       "__type__": "cc.Size",
       "width": 720,
-      "height": 82
+      "height": 116
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
-      "x": 0.5,
+      "x": 0.5018972222222222,
       "y": 0.5
     },
     "_id": "4fXWHWXjhIVaHLhHXiB7WP"
@@ -4599,7 +4599,7 @@
     "_lpos": {
       "__type__": "cc.Vec3",
       "x": 0,
-      "y": -600,
+      "y": -540,
       "z": 0
     },
     "_lrot": {
@@ -4638,7 +4638,7 @@
     "_contentSize": {
       "__type__": "cc.Size",
       "width": 160,
-      "height": 72
+      "height": 116
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
