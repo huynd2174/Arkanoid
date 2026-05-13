@@ -43,6 +43,15 @@ export class GameManager extends Component {
     @property(Node)
     paddle: Node = null!;
 
+    @property(SpriteFrame)
+    normalPaddleFrame: SpriteFrame = null!;
+
+    @property(AnimationClip)
+    paddleBreakClip: AnimationClip = null!;
+
+    @property(AnimationClip)
+    paddleSpawnClip: AnimationClip = null!;
+
     @property(Node)
     ball: Node = null!;
 
@@ -178,6 +187,9 @@ export class GameManager extends Component {
     private readonly normalPaddleWidth: number = 100;
     private readonly extendedPaddleWidth: number = 150;
     private isPaddleExtended: boolean = false;
+    private normalPaddleContentWidth: number = 0;
+    private normalPaddleContentHeight: number = 0;
+    private isPaddleBreaking: boolean = false;
     private paddleBuffToken: number = 0;
     private activePowerUpType: string | null = null;
     private isFireBallActive: boolean = false;
@@ -219,15 +231,18 @@ export class GameManager extends Component {
         this.gameAreaOriginPos = this.gameArea.position.clone();
         this.resolveObstacleGateRefs();
         this.loadBestScore();
+        this.captureNormalPaddleVisual();
 
         input.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
 
         if (this.startButton) {
+            this.bindButtonEffects(this.startButton);
             this.startButton.on(Node.EventType.TOUCH_END, this.startGame, this);
         }
 
         if (this.retryButton) {
+            this.bindButtonEffects(this.retryButton);
             this.retryButton.on(Node.EventType.TOUCH_END, this.startGame, this);
         }
 
@@ -239,10 +254,12 @@ export class GameManager extends Component {
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
 
         if (this.startButton) {
+            this.unbindButtonEffects(this.startButton);
             this.startButton.off(Node.EventType.TOUCH_END, this.startGame, this);
         }
 
         if (this.retryButton) {
+            this.unbindButtonEffects(this.retryButton);
             this.retryButton.off(Node.EventType.TOUCH_END, this.startGame, this);
         }
     }
@@ -271,10 +288,10 @@ export class GameManager extends Component {
         this.attachBallToPaddle();
 
         // Chặn TOUCH_END của nút START/RETRY vừa bấm.
-        this.scheduleOnce(() => {
+        this.playPaddleSpawnAnimation(() => {
             this.canLaunchBall = true;
             this.canMovePaddle = true;
-        }, 0.06);
+        });
     }
 
     resetGame() {
@@ -308,6 +325,7 @@ export class GameManager extends Component {
         this.ball.setScale(this.ballScaleDefault, this.ballScaleDefault, 1);
 
         this.clearPaddleBuff();
+        this.resetPaddleVisual();
 
         this.clearExtraBalls();
         this.paddle.setPosition(0, -430, 0);
@@ -375,12 +393,16 @@ export class GameManager extends Component {
         const h = dt / steps;
 
         for (let s = 0; s < steps; s++) {
+            const previousBallPos = ball.position.clone();
+
             this.moveBall(h, ball, velocity);
             this.checkWallCollision(ball, velocity);
             this.checkPaddleCollision(ball, velocity);
+
             for (let hits = 0; hits < this.maxBrickHitsPerSubstep; hits++) {
-                if (!this.checkBrickCollision(ball, velocity)) break;
+                if (!this.checkBrickCollision(ball, velocity, previousBallPos)) break;
             }
+
             if (this.checkLose(ball, loseLifeOnLost)) {
                 return false;
             }
@@ -390,6 +412,7 @@ export class GameManager extends Component {
     }
 
     private onTouchMove(event: EventTouch) {
+        if (this.isPaddleBreaking) return;
         if (!this.isPlaying || this.isResettingLife || !this.canMovePaddle) return;
 
         const delta = event.getUIDelta();
@@ -420,6 +443,7 @@ export class GameManager extends Component {
     }
 
     private tryLaunchBall() {
+        if (this.isPaddleBreaking) return;
         if (!this.isPlaying || this.isResettingLife || !this.isBallOnPaddle) return;
         if (!this.canLaunchBall) return;
 
@@ -595,16 +619,19 @@ export class GameManager extends Component {
      * - Multi-hit được xử lý qua vòng lặp substep bên ngoài.
      * - Chặn double-reflection và nảy góc dị chuẩn Arkanoid.
      */
-    private checkBrickCollision(ball: Node = this.ball, velocity: Vec3 = this.ballVelocity): boolean {
+    private checkBrickCollision(
+        ball: Node = this.ball,
+        velocity: Vec3 = this.ballVelocity,
+        previousBallPosition?: Vec3
+    ): boolean {
         const r = this.ballRadius;
         const pos = ball.position.clone();
         let nearestIndex = -1;
-        let bestScore = Number.NEGATIVE_INFINITY;
+        let bestScore = Number.POSITIVE_INFINITY;
         let nearestBrick: Node | null = null;
-        let bx = 0;
-        let by = 0;
-        let hw = 0;
-        let hh = 0;
+        let nx = 0;
+        let ny = 1;
+        let penetrationDepth = 0;
 
         for (let i = this.bricks.length - 1; i >= 0; i--) {
             const brick = this.bricks[i];
@@ -622,24 +649,29 @@ export class GameManager extends Component {
 
             if (distSq > r * r) continue;
 
-            const overlapX = halfW + r - Math.abs(pos.x - cx);
-            const overlapY = halfH + r - Math.abs(pos.y - cy);
-            const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
-            const motionX = speed > 0 ? Math.abs(velocity.x) / speed : 0.5;
-            const motionY = speed > 0 ? Math.abs(velocity.y) / speed : 0.5;
-            const axisScore = overlapX < overlapY
-                ? overlapX * (1 + motionX)
-                : overlapY * (1 + motionY);
-            const contactScore = axisScore - distSq * 0.001;
+            const collision = this.resolveBrickCollision(
+                pos,
+                previousBallPosition ?? pos,
+                velocity,
+                cx,
+                cy,
+                halfW,
+                halfH,
+                r,
+                distSq,
+                dx,
+                dy
+            );
+            const approach = Math.max(0, -(velocity.x * collision.nx + velocity.y * collision.ny));
+            const contactScore = collision.penetration - approach * 0.001;
 
-            if (contactScore > bestScore) {
+            if (contactScore < bestScore) {
                 bestScore = contactScore;
                 nearestIndex = i;
                 nearestBrick = brick;
-                bx = cx;
-                by = cy;
-                hw = halfW;
-                hh = halfH;
+                nx = collision.nx;
+                ny = collision.ny;
+                penetrationDepth = collision.penetration;
             }
         }
         if (nearestIndex === -1 || !nearestBrick) return false;
@@ -653,38 +685,8 @@ export class GameManager extends Component {
             return true;
         }
 
-        const closestX = this.clamp(pos.x, bx - hw, bx + hw);
-        const closestY = this.clamp(pos.y, by - hh, by + hh);
-        let nx = pos.x - closestX;
-        let ny = pos.y - closestY;
-        let distSq = nx * nx + ny * ny;
-        if (distSq > 1e-8) {
-            const dist = Math.sqrt(distSq);
-            nx /= dist;
-            ny /= dist;
-            const penetration = r - dist;
-            pos.x += nx * (penetration + 0.5);
-            pos.y += ny * (penetration + 0.5);
-        } else {
-            // Tâm bóng nằm trong/đúng biên rect
-            const dx = pos.x - bx;
-            const dy = pos.y - by;
-            const penX = (hw + r) - Math.abs(dx);
-            const penY = (hh + r) - Math.abs(dy);
-            const preferX = Math.abs(penX - penY) < 0.001
-                ? Math.abs(velocity.x) >= Math.abs(velocity.y)
-                : penX < penY;
-
-            if (preferX) {
-                nx = dx !== 0 ? Math.sign(dx) : (velocity.x >= 0 ? -1 : 1);
-                ny = 0;
-                pos.x = bx + nx * (hw + r + 0.5);
-            } else {
-                nx = 0;
-                ny = dy !== 0 ? Math.sign(dy) : (velocity.y >= 0 ? -1 : 1);
-                pos.y = by + ny * (hh + r + 0.5);
-            }
-        }
+        pos.x += nx * (penetrationDepth + 0.5);
+        pos.y += ny * (penetrationDepth + 0.5);
         const vx = velocity.x;
         const vy = velocity.y;
         const dot = vx * nx + vy * ny;
@@ -708,7 +710,75 @@ export class GameManager extends Component {
             velocity.y *= scale;
         }
         this.ensureBallHasVerticalMotion(velocity, velocity.y);
-        return false;
+        return true;
+    }
+
+    private resolveBrickCollision(
+        currentPos: Vec3,
+        previousPos: Vec3,
+        velocity: Vec3,
+        brickX: number,
+        brickY: number,
+        halfW: number,
+        halfH: number,
+        ballRadius: number,
+        distSq: number,
+        closestDx: number,
+        closestDy: number
+    ): { nx: number; ny: number; penetration: number } {
+        const prevBottom = previousPos.y - ballRadius;
+        const prevTop = previousPos.y + ballRadius;
+        const prevLeft = previousPos.x - ballRadius;
+        const prevRight = previousPos.x + ballRadius;
+        const brickLeft = brickX - halfW;
+        const brickRight = brickX + halfW;
+        const brickBottom = brickY - halfH;
+        const brickTop = brickY + halfH;
+
+        if (velocity.y < 0 && prevBottom >= brickTop) {
+            return { nx: 0, ny: 1, penetration: Math.max(brickTop - (currentPos.y - ballRadius), 0) };
+        }
+
+        if (velocity.y > 0 && prevTop <= brickBottom) {
+            return { nx: 0, ny: -1, penetration: Math.max((currentPos.y + ballRadius) - brickBottom, 0) };
+        }
+
+        if (velocity.x > 0 && prevRight <= brickLeft) {
+            return { nx: -1, ny: 0, penetration: Math.max((currentPos.x + ballRadius) - brickLeft, 0) };
+        }
+
+        if (velocity.x < 0 && prevLeft >= brickRight) {
+            return { nx: 1, ny: 0, penetration: Math.max(brickRight - (currentPos.x - ballRadius), 0) };
+        }
+
+        if (distSq > 1e-8) {
+            const dist = Math.sqrt(distSq);
+
+            return {
+                nx: closestDx / dist,
+                ny: closestDy / dist,
+                penetration: Math.max(ballRadius - dist, 0),
+            };
+        }
+
+        const dx = currentPos.x - brickX;
+        const dy = currentPos.y - brickY;
+        const penX = (halfW + ballRadius) - Math.abs(dx);
+        const penY = (halfH + ballRadius) - Math.abs(dy);
+
+        if (penX < penY) {
+            return {
+                nx: dx !== 0 ? Math.sign(dx) : (velocity.x >= 0 ? -1 : 1),
+                ny: 0,
+                penetration: penX,
+            };
+        }
+
+        return {
+            nx: 0,
+            ny: dy !== 0 ? Math.sign(dy) : (velocity.y >= 0 ? -1 : 1),
+            penetration: penY,
+        };
     }
 
     private relaxBallSpeed(deltaTime: number, velocity: Vec3 = this.ballVelocity) {
@@ -743,12 +813,23 @@ export class GameManager extends Component {
 
         if (ballBottom < gameBottomY) {
             if (loseLifeOnLost) {
-                this.loseLife();
+                this.loseLifeWithPaddleBreak();
             }
             return true;
         }
 
         return false;
+    }
+
+    private loseLifeWithPaddleBreak() {
+        if (this.isResettingLife || this.isPaddleBreaking) return;
+
+        this.isResettingLife = true;
+        this.isGateDropping = false;
+
+        this.playPaddleBreakAnimation(() => {
+            this.loseLife();
+        });
     }
 
     private loseLife() {
@@ -767,12 +848,14 @@ export class GameManager extends Component {
         this.deactivateFireBall();
         this.deactivateLaser();
         this.clearLasers();
+        this.isGateDropping = false;
 
         if (this.lives <= 0) {
             this.isPlaying = false;
             this.startButton.active = false;
             this.canLaunchBall = false;
             this.fadeOutAndClearPowerUps(0.35);
+            this.clearObstacles();
             this.clearPaddleBuff();
             this.fadeOutNode(this.ball, 0.35);
 
@@ -798,10 +881,10 @@ export class GameManager extends Component {
     }
 
     private resetBallAndPaddleAfterLifeLost() {
+        this.preparePaddleForSpawn();
         this.paddleTargetX = 0;
         this.ballVelocity.set(260, 500, 0);
         this.clearExtraBalls();
-        this.clearObstacles();
         this.isGateDropping = false;
         this.obstacleSpawnTimer = 0;
         this.resetNextObstacleSpawnTime();
@@ -827,32 +910,32 @@ export class GameManager extends Component {
                 if (!this.ball || !this.ball.isValid) return;
                 this.ball.active = false;
                 ballOpacity!.opacity = 255;
+                this.startPaddleRespawn();
             })
             .start();
 
-        tween(this.paddle)
-            .to(0.40, { scale: new Vec3(this.paddleScaleDefault * 0.3, this.paddleScaleDefault * 0.3, 1) })
-            .call(() => {
-                this.paddle.setPosition(0, -430, 0);
-                this.paddleTargetX = 0;
-                this.paddle.setScale(this.paddleScaleDefault * 0.3, this.paddleScaleDefault * 0.3, 1);
-                this.ball.active = true;
-                this.ball.setScale(this.ballScaleDefault, this.ballScaleDefault, 1);
-                this.attachBallToPaddle();
-            })
-            .to(0.36, { scale: new Vec3(this.paddleScaleDefault, this.paddleScaleDefault, 1) })
-            .start();
+    }
 
-        this.scheduleOnce(() => {
-            if (this.lives > 0) {
-                this.updateLives();
-                this.isResettingLife = false;
-                this.isPlaying = true;
-                this.isBallOnPaddle = true;
-                this.canLaunchBall = true;
-                this.canMovePaddle = true;
-            }
-        }, 1.02);
+    private startPaddleRespawn() {
+        this.paddle.setPosition(0, -430, 0);
+        this.paddleTargetX = 0;
+        this.ball.active = true;
+        this.ball.setScale(this.ballScaleDefault, this.ballScaleDefault, 1);
+        this.attachBallToPaddle();
+        this.playPaddleSpawnAnimation(() => {
+            this.finishLifeReset();
+        });
+    }
+
+    private finishLifeReset() {
+        if (this.lives <= 0) return;
+
+        this.updateLives();
+        this.isResettingLife = false;
+        this.isPlaying = true;
+        this.isBallOnPaddle = true;
+        this.canLaunchBall = true;
+        this.canMovePaddle = true;
     }
 
     private checkWin() {
@@ -1062,7 +1145,271 @@ export class GameManager extends Component {
             .start();
     }
 
+    private bindButtonEffects(button: Node) {
+        this.startButtonGlow(button);
+        button.on(Node.EventType.TOUCH_START, this.onButtonTouchStart, this);
+        button.on(Node.EventType.TOUCH_END, this.onButtonTouchEnd, this);
+        button.on(Node.EventType.TOUCH_CANCEL, this.onButtonTouchEnd, this);
+    }
+
+    private unbindButtonEffects(button: Node) {
+        this.stopButtonGlow(button);
+        button.off(Node.EventType.TOUCH_START, this.onButtonTouchStart, this);
+        button.off(Node.EventType.TOUCH_END, this.onButtonTouchEnd, this);
+        button.off(Node.EventType.TOUCH_CANCEL, this.onButtonTouchEnd, this);
+    }
+
+    private onButtonTouchStart(event: EventTouch) {
+        const button = event.currentTarget as Node;
+        if (!button || !button.isValid) return;
+
+        Tween.stopAllByTarget(button);
+        button.setScale(1, 1, 1);
+
+        tween(button)
+            .to(0.06, { scale: new Vec3(0.92, 0.92, 1) })
+            .start();
+    }
+
+    private onButtonTouchEnd(event: EventTouch) {
+        const button = event.currentTarget as Node;
+        if (!button || !button.isValid) return;
+
+        this.playButtonReleaseEffect(button);
+    }
+
+    private playButtonReleaseEffect(button: Node) {
+        Tween.stopAllByTarget(button);
+
+        tween(button)
+            .to(0.08, { scale: new Vec3(1.08, 1.08, 1) })
+            .to(0.10, { scale: new Vec3(1, 1, 1) })
+            .start();
+    }
+
+    private startButtonGlow(button: Node) {
+        const buttonSprite = button.getComponent(Sprite);
+
+        if (!buttonSprite) return;
+
+        Tween.stopAllByTarget(buttonSprite);
+
+        const baseColor = new Color(40, 150, 255, 255);
+        const glowColor = new Color(110, 235, 255, 255);
+
+        buttonSprite.color = baseColor;
+
+        tween(buttonSprite)
+            .repeatForever(
+                tween(buttonSprite)
+                    .to(0.75, { color: glowColor })
+                    .to(0.75, { color: baseColor })
+            )
+            .start();
+    }
+
+    private stopButtonGlow(button: Node) {
+        const buttonSprite = button.getComponent(Sprite);
+
+        if (!buttonSprite) return;
+
+        Tween.stopAllByTarget(buttonSprite);
+        buttonSprite.color = new Color(40, 150, 255, 255);
+    }
+
+    private captureNormalPaddleVisual() {
+        const paddleUI = this.paddle.getComponent(UITransform);
+
+        if (paddleUI) {
+            this.normalPaddleContentWidth = paddleUI.width;
+            this.normalPaddleContentHeight = paddleUI.height;
+        }
+
+        if (!this.normalPaddleFrame) {
+            const sprite = this.paddle.getComponent(Sprite);
+
+            if (sprite && sprite.spriteFrame) {
+                this.normalPaddleFrame = sprite.spriteFrame;
+            }
+        }
+    }
+
+    private playPaddleBreakAnimation(onComplete?: () => void) {
+        if (this.isPaddleBreaking) return;
+
+        this.isPaddleBreaking = true;
+        this.isPlaying = false;
+        this.canMovePaddle = false;
+        this.canLaunchBall = false;
+
+        Tween.stopAllByTarget(this.paddle);
+
+        const anim = this.paddle.getComponent(Animation);
+        const opacity = this.paddle.getComponent(UIOpacity) ?? this.paddle.addComponent(UIOpacity);
+
+        opacity.opacity = 255;
+        this.setPaddleLightsActive(false);
+
+        if (!anim) {
+            this.isPaddleBreaking = false;
+
+            if (onComplete) {
+                onComplete();
+            }
+
+            return;
+        }
+
+        anim.stop();
+
+        const finish = () => {
+            this.isPaddleBreaking = false;
+
+            if (onComplete) {
+                onComplete();
+            }
+        };
+
+        const finishAfterFade = () => {
+            Tween.stopAllByTarget(opacity);
+
+            tween(opacity)
+                .to(0.1, { opacity: 0 })
+                .call(finish)
+                .start();
+        };
+
+        if (!anim.getState('paddle_break')) {
+            if (this.paddleBreakClip) {
+                anim.createState(this.paddleBreakClip, 'paddle_break');
+            } else {
+                finish();
+                return;
+            }
+        }
+
+        anim.once(Animation.EventType.FINISHED, finishAfterFade, this);
+        anim.play('paddle_break');
+    }
+
+    private playPaddleSpawnAnimation(onComplete?: () => void) {
+        this.preparePaddleForSpawn();
+
+        const anim = this.paddle.getComponent(Animation);
+        const opacity = this.paddle.getComponent(UIOpacity) ?? this.paddle.addComponent(UIOpacity);
+
+        if (!anim) {
+            this.resetPaddleVisual();
+
+            if (onComplete) {
+                onComplete();
+            }
+
+            return;
+        }
+
+        anim.stop();
+
+        const finish = () => {
+            this.resetPaddleVisual();
+
+            if (onComplete) {
+                onComplete();
+            }
+        };
+
+        if (!anim.getState('paddle_spawn')) {
+            if (this.paddleSpawnClip) {
+                anim.createState(this.paddleSpawnClip, 'paddle_spawn');
+            } else {
+                finish();
+                return;
+            }
+        }
+
+        anim.once(Animation.EventType.FINISHED, finish, this);
+        anim.play('paddle_spawn');
+
+        tween(opacity)
+            .to(0.08, { opacity: 255 })
+            .start();
+    }
+
+    private preparePaddleForSpawn() {
+        Tween.stopAllByTarget(this.paddle);
+
+        const anim = this.paddle.getComponent(Animation);
+        const sprite = this.paddle.getComponent(Sprite);
+        const opacity = this.paddle.getComponent(UIOpacity) ?? this.paddle.addComponent(UIOpacity);
+        const ui = this.paddle.getComponent(UITransform);
+
+        if (anim) {
+            anim.stop();
+        }
+
+        if (sprite) {
+            sprite.spriteFrame = null;
+        }
+
+        if (ui && this.normalPaddleContentWidth > 0 && this.normalPaddleContentHeight > 0) {
+            ui.setContentSize(this.normalPaddleContentWidth, this.normalPaddleContentHeight);
+        }
+
+        Tween.stopAllByTarget(opacity);
+        opacity.opacity = 0;
+
+        this.paddle.active = true;
+        this.paddle.setScale(this.paddleScaleDefault, this.paddleScaleDefault, 1);
+        this.setPaddleLightsActive(false);
+        this.isPaddleBreaking = false;
+    }
+
+    private setPaddleLightsActive(active: boolean) {
+        const leftLight = this.paddle.getChildByName('LeftLight');
+        const rightLight = this.paddle.getChildByName('RightLight');
+
+        if (leftLight) {
+            leftLight.active = active;
+        }
+
+        if (rightLight) {
+            rightLight.active = active;
+        }
+    }
+
+    private resetPaddleVisual() {
+        const anim = this.paddle.getComponent(Animation);
+        const sprite = this.paddle.getComponent(Sprite);
+        const opacity = this.paddle.getComponent(UIOpacity);
+        const ui = this.paddle.getComponent(UITransform);
+
+        if (anim) {
+            anim.stop();
+        }
+
+        if (sprite && this.normalPaddleFrame) {
+            sprite.spriteFrame = this.normalPaddleFrame;
+        }
+
+        if (opacity) {
+            Tween.stopAllByTarget(opacity);
+            opacity.opacity = 255;
+        }
+
+        if (ui && this.normalPaddleContentWidth > 0 && this.normalPaddleContentHeight > 0) {
+            ui.setContentSize(this.normalPaddleContentWidth, this.normalPaddleContentHeight);
+        }
+
+        this.paddle.active = true;
+        this.paddle.setScale(this.paddleScaleDefault, this.paddleScaleDefault, 1);
+        this.setPaddleLightsActive(true);
+
+        this.isPaddleBreaking = false;
+    }
+
     private playPaddleHitEffect() {
+        if (this.isPaddleBreaking) return;
+
         this.paddle.setScale(this.paddleScaleDefault, this.paddleScaleDefault, 1);
 
         tween(this.paddle)
@@ -1109,6 +1456,19 @@ export class GameManager extends Component {
         const uiTransform = scoreNode.addComponent(UITransform);
         uiTransform.setContentSize(120, 50);
 
+        const shadowNode = new Node('ScorePopupShadow');
+        shadowNode.setParent(scoreNode);
+        shadowNode.setPosition(2, -2, 0);
+
+        const shadowUI = shadowNode.addComponent(UITransform);
+        shadowUI.setContentSize(120, 50);
+
+        const shadowLabel = shadowNode.addComponent(Label);
+        shadowLabel.string = '+10';
+        shadowLabel.fontSize = 32;
+        shadowLabel.lineHeight = 36;
+        shadowLabel.color = new Color(20, 10, 0, 220);
+
         const label = scoreNode.addComponent(Label);
         label.string = '+10';
         label.fontSize = 32;
@@ -1119,14 +1479,18 @@ export class GameManager extends Component {
         opacity.opacity = 255;
 
         tween(scoreNode)
-            .to(0.35, {
-                position: new Vec3(startPosition.x, startPosition.y + 70, 0),
+            .to(0.08, {
                 scale: new Vec3(1.25, 1.25, 1),
+            })
+            .to(0.32, {
+                position: new Vec3(startPosition.x, startPosition.y + 70, 0),
+                scale: new Vec3(1, 1, 1),
             })
             .start();
 
         tween(opacity)
-            .to(0.35, { opacity: 0 })
+            .delay(0.08)
+            .to(0.32, { opacity: 0 })
             .call(() => {
                 if (scoreNode && scoreNode.isValid) {
                     scoreNode.destroy();
@@ -1136,19 +1500,24 @@ export class GameManager extends Component {
     }
 
     private updateBallTrail(deltaTime: number) {
-        if (!this.ball.active) return;
+        if (!this.balls || this.balls.length <= 0) return;
 
         this.trailTimer += deltaTime;
 
         if (this.trailTimer < this.trailInterval) return;
 
         this.trailTimer = 0;
-        this.createBallTrail();
+
+        for (const ball of this.balls) {
+            if (!ball || !ball.isValid || !ball.active) continue;
+
+            this.createBallTrail(ball);
+        }
     }
 
-    private createBallTrail() {
-        const ballSprite = this.ball.getComponent(Sprite);
-        const ballUI = this.ball.getComponent(UITransform);
+    private createBallTrail(ball: Node = this.ball) {
+        const ballSprite = ball.getComponent(Sprite);
+        const ballUI = ball.getComponent(UITransform);
 
         if (!ballSprite || !ballSprite.spriteFrame || !ballUI) return;
 
@@ -1156,8 +1525,8 @@ export class GameManager extends Component {
 
         trailNode.setParent(this.gameArea);
         trailNode.setSiblingIndex(0);
-        trailNode.setPosition(this.ball.position.x, this.ball.position.y, 0);
-        trailNode.setScale(this.ballScaleDefault, this.ballScaleDefault, 1);
+        trailNode.setPosition(ball.position.x, ball.position.y, 0);
+        trailNode.setScale(ball.scale.x, ball.scale.y, 1);
 
         const trailUI = trailNode.addComponent(UITransform);
         trailUI.setContentSize(ballUI.width, ballUI.height);
@@ -1170,7 +1539,7 @@ export class GameManager extends Component {
         opacity.opacity = 150;
 
         tween(trailNode)
-            .to(0.22, { scale: new Vec3(this.ballScaleDefault * 0.45, this.ballScaleDefault * 0.45, 1) })
+            .to(0.22, { scale: new Vec3(ball.scale.x * 0.45, ball.scale.y * 0.45, 1) })
             .start();
 
         tween(opacity)
@@ -1218,7 +1587,7 @@ export class GameManager extends Component {
         this.resultPanel.setScale(0.85, 0.85, 1);
 
         this.resultTitle.string = title;
-        this.finalScoreLabel.string = `Score: ${this.score}`;
+        this.finalScoreLabel.string = `${this.score}`;
 
         tween(this.resultPanel)
             .to(0.16, { scale: new Vec3(1.06, 1.06, 1) })
@@ -1543,7 +1912,7 @@ export class GameManager extends Component {
         }
 
         if (this.balls.length <= 0 && !this.isResettingLife) {
-            this.loseLife();
+            this.loseLifeWithPaddleBreak();
         }
     }
 
@@ -1555,7 +1924,7 @@ export class GameManager extends Component {
             return;
         }
 
-        this.loseLife();
+        this.loseLifeWithPaddleBreak();
     }
 
     private removeBall(ball: Node, ballIndex: number) {
@@ -2091,6 +2460,8 @@ export class GameManager extends Component {
 
     private spawnObstacleFromGate(gateIndex: number) {
         if (!this.obstaclePrefab) return;
+        if (!this.isPlaying || this.isResettingLife) return;
+
         this.resolveObstacleGateRefs();
 
         const spawnPoint = this.dropSpawnPoints[gateIndex];
@@ -2180,39 +2551,28 @@ export class GameManager extends Component {
                 }
 
                 const dir = item ? item.avoidDir : 1;
-                const slowDrop = currentFallSpeed * 0.35 * deltaTime;
                 const sideStep = avoidSpeed * deltaTime;
+                const resolvedPos = this.findObstacleBrickAvoidPosition(
+                    obstacle,
+                    oldPos,
+                    newPos,
+                    dir,
+                    sideStep,
+                    currentFallSpeed * deltaTime,
+                    leftLimit,
+                    rightLimit
+                );
 
-                const primaryPos = oldPos.clone();
-                primaryPos.x = this.clamp(primaryPos.x + dir * sideStep, leftLimit, rightLimit);
-                primaryPos.y -= slowDrop;
-
-                if (!this.isObstacleTouchingAnyBrickAt(obstacle, primaryPos)) {
-                    obstacle.setPosition(primaryPos);
-                } else {
-                    const reverseDir = -dir;
-                    const reversePos = oldPos.clone();
-                    reversePos.x = this.clamp(reversePos.x + reverseDir * sideStep, leftLimit, rightLimit);
-                    reversePos.y -= slowDrop;
-
-                    if (!this.isObstacleTouchingAnyBrickAt(obstacle, reversePos)) {
-                        if (item) {
-                            item.avoidDir = reverseDir;
-                        }
-
-                        obstacle.setPosition(reversePos);
-                    } else {
-                        const slidePos = oldPos.clone();
-                        slidePos.x = this.clamp(slidePos.x + dir * sideStep, leftLimit, rightLimit);
-
-                        if (slidePos.x <= leftLimit || slidePos.x >= rightLimit) {
-                            if (item) {
-                                item.avoidDir *= -1;
-                            }
-                        }
-
-                        obstacle.setPosition(slidePos);
+                if (resolvedPos) {
+                    if (item && resolvedPos.x < oldPos.x) {
+                        item.avoidDir = -1;
+                    } else if (item && resolvedPos.x > oldPos.x) {
+                        item.avoidDir = 1;
                     }
+
+                    obstacle.setPosition(resolvedPos);
+                } else {
+                    obstacle.setPosition(oldPos);
                 }
             } else if (item) {
                 item.avoidDir = 0;
@@ -2246,11 +2606,134 @@ export class GameManager extends Component {
         return false;
     }
 
+    private findObstacleBrickAvoidPosition(
+        obstacle: Node,
+        origin: Vec3,
+        blockedPosition: Vec3,
+        preferredDir: number,
+        sideStep: number,
+        fallStep: number,
+        leftLimit: number,
+        rightLimit: number
+    ): Vec3 | null {
+        const directions = [preferredDir, -preferredDir];
+        const dropSteps = [fallStep * 0.2, 0, fallStep * 0.5];
+        const minStep = Math.max(sideStep, 0.5);
+        const maxStep = Math.max(sideStep, minStep);
+
+        for (const drop of dropSteps) {
+            for (const dir of directions) {
+                for (let distance = minStep; distance <= maxStep; distance += minStep) {
+                    const candidate = origin.clone();
+                    candidate.x = this.clamp(origin.x + dir * distance, leftLimit, rightLimit);
+                    candidate.y = origin.y - drop;
+
+                    if (!this.isObstacleTouchingAnyBrickAt(obstacle, candidate)) {
+                        return candidate;
+                    }
+                }
+            }
+        }
+
+        const upStep = Math.max(fallStep, sideStep, 1);
+        const maxUpStep = Math.max(upStep * 4, 40);
+
+        for (let distance = upStep; distance <= maxUpStep; distance += upStep) {
+            const candidate = blockedPosition.clone();
+            candidate.y = blockedPosition.y + distance;
+
+            if (!this.isObstacleTouchingAnyBrickAt(obstacle, candidate)) {
+                return candidate;
+            }
+        }
+
+        return this.getObstaclePositionOutsideNearestBrick(
+            obstacle,
+            blockedPosition,
+            preferredDir,
+            leftLimit,
+            rightLimit
+        );
+    }
+
+    private getObstaclePositionOutsideNearestBrick(
+        obstacle: Node,
+        origin: Vec3,
+        preferredDir: number,
+        leftLimit: number,
+        rightLimit: number
+    ): Vec3 | null {
+        const obstacleUI = obstacle.getComponent(UITransform);
+        if (!obstacleUI) return null;
+
+        const obstacleHalfW = obstacleUI.width * Math.abs(obstacle.scale.x) / 2;
+        const obstacleHalfH = obstacleUI.height * Math.abs(obstacle.scale.y) / 2;
+        let nearestBrick: Node | null = null;
+        let nearestDistance = Number.POSITIVE_INFINITY;
+
+        for (const brick of this.bricks) {
+            if (!brick || !brick.isValid) continue;
+
+            if (!this.isObstacleTouchingBrickAt(obstacle, brick, origin)) continue;
+
+            const dx = Math.abs(origin.x - brick.position.x);
+            const dy = Math.abs(origin.y - brick.position.y);
+            const distance = dx + dy;
+
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestBrick = brick;
+            }
+        }
+
+        if (!nearestBrick) return null;
+
+        const brickUI = nearestBrick.getComponent(UITransform);
+        if (!brickUI) return null;
+
+        const brickHalfW = brickUI.width * Math.abs(nearestBrick.scale.x) / 2;
+        const brickHalfH = brickUI.height * Math.abs(nearestBrick.scale.y) / 2;
+        const margin = 2;
+        const candidates: Vec3[] = [];
+
+        for (const dir of [preferredDir, -preferredDir]) {
+            const x = dir > 0
+                ? nearestBrick.position.x + brickHalfW + obstacleHalfW + margin
+                : nearestBrick.position.x - brickHalfW - obstacleHalfW - margin;
+
+            candidates.push(new Vec3(this.clamp(x, leftLimit, rightLimit), origin.y, 0));
+        }
+
+        candidates.push(new Vec3(
+            origin.x,
+            nearestBrick.position.y + brickHalfH + obstacleHalfH + margin,
+            0
+        ));
+
+        for (const candidate of candidates) {
+            if (!this.isObstacleTouchingAnyBrickAt(obstacle, candidate)) {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     private isObstacleTouchingAnyBrickAt(obstacle: Node, position: Vec3): boolean {
         const originalPosition = obstacle.position.clone();
 
         obstacle.setPosition(position);
         const isTouching = this.isObstacleTouchingAnyBrick(obstacle);
+        obstacle.setPosition(originalPosition);
+
+        return isTouching;
+    }
+
+    private isObstacleTouchingBrickAt(obstacle: Node, brick: Node, position: Vec3): boolean {
+        const originalPosition = obstacle.position.clone();
+
+        obstacle.setPosition(position);
+        const isTouching = this.isRectHit(obstacle, brick);
         obstacle.setPosition(originalPosition);
 
         return isTouching;
